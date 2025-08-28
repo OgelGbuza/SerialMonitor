@@ -58,7 +58,6 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance
     icex.dwSize = sizeof(INITCOMMONCONTROLSEX);
     icex.dwICC = ICC_LISTVIEW_CLASSES;
     InitCommonControlsEx(&icex);
-
     InitDarkMode();
     LoadStringW(hInstance, IDS_APP_TITLE, szTitle, MAX_LOADSTRING);
     LoadStringW(hInstance, IDC_SERIALMONITOR, szWindowClass, MAX_LOADSTRING);
@@ -105,13 +104,13 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
     {
     case WM_CTLCOLORSTATIC: {
         HDC hdcStatic = (HDC)wParam;
-        SetTextColor(hdcStatic, RGB(220, 220, 220));
+        SetTextColor(hdcStatic, RGB(255, 0, 255)); // Magenta for labels
         SetBkColor(hdcStatic, RGB(0, 0, 0));
         return (INT_PTR)g_brBackground;
     }
     case WM_CTLCOLOREDIT: {
         HDC hdcEdit = (HDC)wParam;
-        SetTextColor(hdcEdit, RGB(0, 255, 255));
+        SetTextColor(hdcEdit, RGB(0, 255, 255)); // Cyan for Edit Box text
         SetBkColor(hdcEdit, RGB(20, 20, 20));
         return (INT_PTR)g_brEditBackground;
     }
@@ -126,36 +125,27 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
             case CDDS_PREPAINT:
                 return CDRF_NOTIFYITEMDRAW;
             case CDDS_ITEMPREPAINT:
-                // Set the row background to black before anything is drawn
-                lplvcd->clrTextBk = RGB(0, 0, 0);
-                // Request notification for after the item is painted
+                lplvcd->clrTextBk = RGB(0, 0, 0); // Black background for rows
                 return CDRF_NOTIFYPOSTPAINT;
-
-            case CDDS_ITEMPOSTPAINT: // After the item has been drawn by the system
+            case CDDS_ITEMPOSTPAINT:
             {
                 int iItem = (int)lplvcd->nmcd.dwItemSpec;
                 HDC hdc = lplvcd->nmcd.hdc;
-
-                wchar_t text[512]; // Buffer for item text
+                wchar_t text[512];
                 RECT subItemRect;
+                SetBkMode(hdc, TRANSPARENT);
 
-                // --- Draw Column 0 (Time) in Magenta ---
                 ListView_GetSubItemRect(hOutputListView, iItem, 0, LVIR_LABEL, &subItemRect);
                 ListView_GetItemText(hOutputListView, iItem, 0, text, sizeof(text) / sizeof(wchar_t));
-                // Erase the cell with a black background first to prevent glitches
                 FillRect(hdc, &subItemRect, g_brBackground);
-                SetTextColor(hdc, RGB(255, 0, 255)); // Magenta
-                SetBkMode(hdc, TRANSPARENT);
-                // Add padding to the left
+                SetTextColor(hdc, RGB(255, 0, 255)); // Magenta for Time
                 subItemRect.left += 4;
                 DrawTextW(hdc, text, -1, &subItemRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
 
-                // --- Draw Column 1 (Message) in Green ---
                 ListView_GetSubItemRect(hOutputListView, iItem, 1, LVIR_LABEL, &subItemRect);
                 ListView_GetItemText(hOutputListView, iItem, 1, text, sizeof(text) / sizeof(wchar_t));
                 FillRect(hdc, &subItemRect, g_brBackground);
-                SetTextColor(hdc, RGB(0, 255, 0)); // Green
-                SetBkMode(hdc, TRANSPARENT);
+                SetTextColor(hdc, RGB(0, 255, 0)); // Green for Message
                 subItemRect.left += 4;
                 DrawTextW(hdc, text, -1, &subItemRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
 
@@ -267,6 +257,9 @@ void CreateControls(HWND hWnd)
     hStopButton = CreateWindowW(L"BUTTON", L"Stop", WS_CHILD | WS_VISIBLE, 400, 40, 110, 25, hWnd, (HMENU)IDC_STOP_BUTTON, hInst, NULL);
     hClearButton = CreateWindowW(L"BUTTON", L"Clear Output", WS_CHILD | WS_VISIBLE, 520, 10, 95, 55, hWnd, (HMENU)IDC_CLEAR_BUTTON, hInst, NULL);
     hOutputListView = CreateWindowExW(0, WC_LISTVIEWW, L"", WS_CHILD | WS_VISIBLE | WS_BORDER | LVS_REPORT, 10, 105, 605, 330, hWnd, (HMENU)IDC_OUTPUT_EDIT, hInst, NULL);
+
+    ListView_SetBkColor(hOutputListView, RGB(0, 0, 0));
+
     LVCOLUMNW lvc = { 0 };
     lvc.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_SUBITEM;
     lvc.cx = 100;
