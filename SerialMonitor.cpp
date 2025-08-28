@@ -36,8 +36,8 @@ HWND hPortCombo, hBaudCombo, hStartButton, hStopButton, hOutputListView, hRefres
 HWND hLogDirEdit, hBrowseButton, hStatusLabel, hCancelButton, hClearButton;
 HANDLE hThread = NULL;
 volatile bool bShouldBeMonitoring = false;
-HBRUSH g_hbrBackground = CreateSolidBrush(RGB(0, 0, 0));
-HBRUSH g_hbrEditBackground = CreateSolidBrush(RGB(20, 20, 20));
+HBRUSH g_brBackground = CreateSolidBrush(RGB(0, 0, 0));
+HBRUSH g_brEditBackground = CreateSolidBrush(RGB(20, 20, 20));
 
 // Forward Declarations
 ATOM                MyRegisterClass(HINSTANCE hInstance);
@@ -81,7 +81,7 @@ ATOM MyRegisterClass(HINSTANCE hInstance)
     wcex.hInstance = hInstance;
     wcex.hIcon = LoadIcon(hInstance, MAKEINTRESOURCE(IDI_SERIALMONITOR));
     wcex.hCursor = LoadCursor(nullptr, IDC_ARROW);
-    wcex.hbrBackground = g_hbrBackground;
+    wcex.hbrBackground = g_brBackground;
     wcex.lpszClassName = szWindowClass;
     wcex.hIconSm = LoadIcon(wcex.hInstance, MAKEINTRESOURCE(IDI_SMALL));
     return RegisterClassExW(&wcex);
@@ -107,13 +107,13 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         HDC hdcStatic = (HDC)wParam;
         SetTextColor(hdcStatic, RGB(220, 220, 220));
         SetBkColor(hdcStatic, RGB(0, 0, 0));
-        return (INT_PTR)g_hbrBackground;
+        return (INT_PTR)g_brBackground;
     }
     case WM_CTLCOLOREDIT: {
         HDC hdcEdit = (HDC)wParam;
-        SetTextColor(hdcEdit, RGB(220, 220, 220));
+        SetTextColor(hdcEdit, RGB(0, 255, 255));
         SetBkColor(hdcEdit, RGB(20, 20, 20));
-        return (INT_PTR)g_hbrEditBackground;
+        return (INT_PTR)g_brEditBackground;
     }
     case WM_NOTIFY:
     {
@@ -126,9 +126,41 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
             case CDDS_PREPAINT:
                 return CDRF_NOTIFYITEMDRAW;
             case CDDS_ITEMPREPAINT:
-                lplvcd->clrText = RGB(0, 255, 0);
+                // Set the row background to black before anything is drawn
                 lplvcd->clrTextBk = RGB(0, 0, 0);
+                // Request notification for after the item is painted
+                return CDRF_NOTIFYPOSTPAINT;
+
+            case CDDS_ITEMPOSTPAINT: // After the item has been drawn by the system
+            {
+                int iItem = (int)lplvcd->nmcd.dwItemSpec;
+                HDC hdc = lplvcd->nmcd.hdc;
+
+                wchar_t text[512]; // Buffer for item text
+                RECT subItemRect;
+
+                // --- Draw Column 0 (Time) in Magenta ---
+                ListView_GetSubItemRect(hOutputListView, iItem, 0, LVIR_LABEL, &subItemRect);
+                ListView_GetItemText(hOutputListView, iItem, 0, text, sizeof(text) / sizeof(wchar_t));
+                // Erase the cell with a black background first to prevent glitches
+                FillRect(hdc, &subItemRect, g_brBackground);
+                SetTextColor(hdc, RGB(255, 0, 255)); // Magenta
+                SetBkMode(hdc, TRANSPARENT);
+                // Add padding to the left
+                subItemRect.left += 4;
+                DrawTextW(hdc, text, -1, &subItemRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+
+                // --- Draw Column 1 (Message) in Green ---
+                ListView_GetSubItemRect(hOutputListView, iItem, 1, LVIR_LABEL, &subItemRect);
+                ListView_GetItemText(hOutputListView, iItem, 1, text, sizeof(text) / sizeof(wchar_t));
+                FillRect(hdc, &subItemRect, g_brBackground);
+                SetTextColor(hdc, RGB(0, 255, 0)); // Green
+                SetBkMode(hdc, TRANSPARENT);
+                subItemRect.left += 4;
+                DrawTextW(hdc, text, -1, &subItemRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+
                 return CDRF_DODEFAULT;
+            }
             }
         }
         break;
@@ -310,26 +342,21 @@ DWORD WINAPI SerialThread(LPVOID lpParam)
     HWND hWnd = (HWND)lpParam;
     HANDLE hSerial = INVALID_HANDLE_VALUE;
     HANDLE hLogFile = INVALID_HANDLE_VALUE;
-
     wchar_t portW[32], baudW[16], logDirW[MAX_PATH];
     GetWindowTextW(hPortCombo, portW, 32);
     GetWindowTextW(hBaudCombo, baudW, 16);
     GetWindowTextW(hLogDirEdit, logDirW, MAX_PATH);
     std::wstring fullPortName = L"\\\\.\\" + std::wstring(portW);
-
     wchar_t status[128];
     wsprintfW(status, L"Connecting to %s...", portW);
     wchar_t* statusMsg = new wchar_t[128];
     wcscpy_s(statusMsg, 128, status);
     PostMessageW(hWnd, WM_UPDATE_STATUS, (WPARAM)statusMsg, 0);
-
     hSerial = CreateFileW(fullPortName.c_str(), GENERIC_READ | GENERIC_WRITE, 0, 0, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0);
-
     if (hSerial == INVALID_HANDLE_VALUE) {
         PostMessage(hWnd, WM_CONNECTION_LOST, 0, 0);
         return 1;
     }
-
     DCB dcb = { 0 };
     dcb.DCBlength = sizeof(dcb);
     if (GetCommState(hSerial, &dcb)) {
@@ -345,24 +372,20 @@ DWORD WINAPI SerialThread(LPVOID lpParam)
     SetCommTimeouts(hSerial, &timeouts);
     EscapeCommFunction(hSerial, CLRDTR); Sleep(100);
     EscapeCommFunction(hSerial, SETDTR); Sleep(500);
-
     PostMessage(hWnd, WM_GUI_STATE_CONNECTED, 0, 0);
     wsprintfW(status, L"✅ Connected to %s", portW);
     statusMsg = new wchar_t[128];
     wcscpy_s(statusMsg, 128, status);
     PostMessageW(hWnd, WM_UPDATE_STATUS, (WPARAM)statusMsg, 0);
-
     SYSTEMTIME st;
     GetLocalTime(&st);
     wchar_t logFileName[MAX_PATH];
     wsprintfW(logFileName, L"%s\\log_%s_%04d-%02d-%02d_%02d-%02d-%02d.txt", logDirW, portW, st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
     hLogFile = CreateFileW(logFileName, FILE_APPEND_DATA, FILE_SHARE_READ, NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-
     std::string dataBuffer;
     ULONGLONG lastUpdateTime = GetTickCount64();
     char readBuf[512];
     DWORD bytesRead;
-
     while (bShouldBeMonitoring) {
         if (ReadFile(hSerial, readBuf, sizeof(readBuf), &bytesRead, NULL)) {
             if (bytesRead > 0) {
@@ -374,34 +397,28 @@ DWORD WINAPI SerialThread(LPVOID lpParam)
             PostMessage(hWnd, WM_CONNECTION_LOST, 0, 0);
             break;
         }
-
         if (GetTickCount64() - lastUpdateTime > 100) {
             size_t newline_pos;
             while ((newline_pos = dataBuffer.find('\n')) != std::string::npos)
             {
                 std::string message = dataBuffer.substr(0, newline_pos + 1);
                 dataBuffer.erase(0, newline_pos + 1);
-
                 LogEntry* entry = new LogEntry();
-
                 SYSTEMTIME st_now;
                 GetLocalTime(&st_now);
                 wchar_t timeBuf[32];
                 wsprintfW(timeBuf, L"%02d:%02d:%02d.%03d", st_now.wHour, st_now.wMinute, st_now.wSecond, st_now.wMilliseconds);
                 entry->timestamp = timeBuf;
-
                 wchar_t* wideBuf = new wchar_t[message.length() + 1];
                 MultiByteToWideChar(CP_UTF8, 0, message.c_str(), -1, wideBuf, static_cast<int>(message.length() + 1));
                 entry->message = wideBuf;
                 delete[] wideBuf;
-
                 PostMessageW(hWnd, WM_SERIAL_DATA_RECEIVED, (WPARAM)entry, 0);
             }
             if (hLogFile != INVALID_HANDLE_VALUE) FlushFileBuffers(hLogFile);
             lastUpdateTime = GetTickCount64();
         }
     }
-
     if (hSerial != INVALID_HANDLE_VALUE) CloseHandle(hSerial);
     if (hLogFile != INVALID_HANDLE_VALUE) CloseHandle(hLogFile);
     return 0;
@@ -453,19 +470,17 @@ void LoadSettings()
 void AddLogEntry(const LogEntry* entry)
 {
     const int MAX_ITEMS = 5000;
-    int itemCount = ListView_GetItemCount(hOutputListView);
+    LRESULT itemCount = ListView_GetItemCount(hOutputListView);
     if (itemCount >= MAX_ITEMS) {
         ListView_DeleteItem(hOutputListView, 0);
     }
-
     itemCount = ListView_GetItemCount(hOutputListView);
     LVITEMW lvi = { 0 };
     lvi.mask = LVIF_TEXT;
-    lvi.iItem = itemCount;
+    lvi.iItem = (int)itemCount;
     lvi.iSubItem = 0;
     lvi.pszText = (LPWSTR)entry->timestamp.c_str();
-    int newIndex = ListView_InsertItem(hOutputListView, &lvi);
-
+    LRESULT newIndex = ListView_InsertItem(hOutputListView, &lvi);
     std::wstring normalizedMessage = entry->message;
     size_t pos = 0;
     while ((pos = normalizedMessage.find(L"\n", pos)) != std::wstring::npos) {
@@ -477,7 +492,6 @@ void AddLogEntry(const LogEntry* entry)
             pos += 1;
         }
     }
-
     pos = normalizedMessage.find_last_not_of(L"\r\n");
     if (pos != std::wstring::npos) {
         normalizedMessage.erase(pos + 1);
@@ -485,7 +499,6 @@ void AddLogEntry(const LogEntry* entry)
     else {
         normalizedMessage.clear();
     }
-
-    ListView_SetItemText(hOutputListView, newIndex, 1, (LPWSTR)normalizedMessage.c_str());
-    ListView_EnsureVisible(hOutputListView, newIndex, FALSE);
+    ListView_SetItemText(hOutputListView, (int)newIndex, 1, (LPWSTR)normalizedMessage.c_str());
+    ListView_EnsureVisible(hOutputListView, (int)newIndex, FALSE);
 }
