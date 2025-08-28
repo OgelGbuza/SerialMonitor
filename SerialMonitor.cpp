@@ -273,12 +273,20 @@ void StopMonitoring()
     if (bShouldBeMonitoring) {
         bShouldBeMonitoring = false;
         if (hThread != NULL) {
+            // Wait for the thread to finish, but with a timeout
             WaitForSingleObject(hThread, 2000);
+
+            // Close the handle to the thread object
             CloseHandle(hThread);
+
+            // >> THE FIX: Reset the global handle to NULL
+            // >> This prevents us from ever using a stale/invalid handle again.
             hThread = NULL;
         }
         SetWindowTextW(hStatusLabel, L"Stopped.");
     }
+
+    // Reset the GUI to its initial state
     EnableWindow(hStartButton, TRUE);
     EnableWindow(hStopButton, FALSE);
     ShowWindow(hCancelButton, SW_HIDE);
@@ -298,10 +306,10 @@ DWORD WINAPI ConnectionManagerThread(LPVOID lpParam)
 
     std::string dataBuffer;
     std::wstring statusBuffer;
-    DWORD lastUpdateTime = GetTickCount();
+    ULONGLONG lastUpdateTime = GetTickCount64();
 
     while (bShouldBeMonitoring) {
-        hSerial = CreateFileW(fullPortName.c_str(), GENERIC_READ, 0, 0, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0);
+        hSerial = CreateFileW(fullPortName.c_str(), GENERIC_READ | GENERIC_WRITE, 0, 0, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0);
 
         if (hSerial == INVALID_HANDLE_VALUE) {
             statusBuffer = L"Failed to open " + std::wstring(portW) + L". Retrying in 5s...";
@@ -319,12 +327,23 @@ DWORD WINAPI ConnectionManagerThread(LPVOID lpParam)
             dcb.ByteSize = 8;
             dcb.Parity = NOPARITY;
             dcb.StopBits = ONESTOPBIT;
+            dcb.fDtrControl = DTR_CONTROL_ENABLE; // >> Ensure DTR is enabled
             SetCommState(hSerial, &dcb);
         }
 
         COMMTIMEOUTS timeouts = { 0 };
         timeouts.ReadIntervalTimeout = 100;
         SetCommTimeouts(hSerial, &timeouts);
+
+        // >> ====================================================================
+        // >> THE "SOFTWARE RESET" FIX
+        // >> We toggle the DTR line to force-reset the Arduino-compatible device.
+        // >> This ensures it starts in a clean state every time we connect.
+        EscapeCommFunction(hSerial, CLRDTR); // Set DTR low
+        Sleep(100);                          // Wait 100 milliseconds
+        EscapeCommFunction(hSerial, SETDTR); // Set DTR high
+        Sleep(500);                          // Give the device time to reboot
+        // >> ====================================================================
 
         statusBuffer = L"✅ Connected to " + std::wstring(portW);
         ShowWindow(hCancelButton, SW_HIDE);
@@ -358,7 +377,7 @@ DWORD WINAPI ConnectionManagerThread(LPVOID lpParam)
                 break;
             }
 
-            if (GetTickCount() - lastUpdateTime > 100) {
+            if (GetTickCount64() - lastUpdateTime > 100) {
                 if (!statusBuffer.empty()) {
                     wchar_t* statusMsg = new wchar_t[statusBuffer.length() + 1];
                     wcscpy_s(statusMsg, statusBuffer.length() + 1, statusBuffer.c_str());
@@ -376,7 +395,7 @@ DWORD WINAPI ConnectionManagerThread(LPVOID lpParam)
                         FlushFileBuffers(hLogFile);
                     }
                 }
-                lastUpdateTime = GetTickCount();
+                lastUpdateTime = GetTickCount64();
             }
         }
     }
@@ -440,14 +459,27 @@ void AppendTextToEdit(HWND hEdit, const wchar_t* newText)
 {
     const int MAX_LINES = 5000;
 
+    // >> THE FIX: Normalize line endings for the Windows EDIT control.
+    // >> We convert all incoming newlines (like '\n') to the required '\r\n'.
+    std::wstring textToAppend = newText;
+    size_t pos = 0;
+    while ((pos = textToAppend.find(L"\n", pos)) != std::wstring::npos) {
+        // Check if it's already a proper "\r\n" or just a lone "\n"
+        if (pos == 0 || textToAppend[pos - 1] != L'\r') {
+            textToAppend.replace(pos, 1, L"\r\n");
+        }
+        pos += 2; // Move past the newly inserted "\r\n"
+    }
+
+    // Limit the number of lines to prevent slowdown
     int lineCount = SendMessage(hEdit, EM_GETLINECOUNT, 0, 0);
     if (lineCount > MAX_LINES) {
         int firstLineLen = SendMessage(hEdit, EM_LINELENGTH, 0, 0);
-        SendMessage(hEdit, EM_SETSEL, 0, firstLineLen + 2);
-        SendMessage(hEdit, EM_REPLACESEL, 0, (LPARAM)L"");
+        SendMessage(hEdit, EM_SETSEL, 0, firstLineLen + 2); // Select the first line + \r\n
+        SendMessage(hEdit, EM_REPLACESEL, 0, (LPARAM)L"");  // Delete it
     }
 
     int len = GetWindowTextLengthW(hEdit);
-    SendMessageW(hEdit, EM_SETSEL, (WPARAM)len, (LPARAM)len);
-    SendMessageW(hEdit, EM_REPLACESEL, 0, (LPARAM)newText);
+    SendMessageW(hEdit, EM_SETSEL, (WPARAM)len, (LPARAM)len); // Move cursor to end
+    SendMessageW(hEdit, EM_REPLACESEL, 0, (LPARAM)textToAppend.c_str());  // Append the corrected text
 }
