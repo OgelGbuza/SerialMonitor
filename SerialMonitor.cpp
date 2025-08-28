@@ -104,13 +104,13 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
     {
     case WM_CTLCOLORSTATIC: {
         HDC hdcStatic = (HDC)wParam;
-        SetTextColor(hdcStatic, RGB(255, 0, 255)); // Magenta for labels
+        SetTextColor(hdcStatic, RGB(255, 0, 255));
         SetBkColor(hdcStatic, RGB(0, 0, 0));
         return (INT_PTR)g_brBackground;
     }
     case WM_CTLCOLOREDIT: {
         HDC hdcEdit = (HDC)wParam;
-        SetTextColor(hdcEdit, RGB(0, 255, 255)); // Cyan for Edit Box text
+        SetTextColor(hdcEdit, RGB(0, 255, 255));
         SetBkColor(hdcEdit, RGB(20, 20, 20));
         return (INT_PTR)g_brEditBackground;
     }
@@ -125,7 +125,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
             case CDDS_PREPAINT:
                 return CDRF_NOTIFYITEMDRAW;
             case CDDS_ITEMPREPAINT:
-                lplvcd->clrTextBk = RGB(0, 0, 0); // Black background for rows
+                lplvcd->clrTextBk = RGB(0, 0, 0);
                 return CDRF_NOTIFYPOSTPAINT;
             case CDDS_ITEMPOSTPAINT:
             {
@@ -134,21 +134,18 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
                 wchar_t text[512];
                 RECT subItemRect;
                 SetBkMode(hdc, TRANSPARENT);
-
                 ListView_GetSubItemRect(hOutputListView, iItem, 0, LVIR_LABEL, &subItemRect);
                 ListView_GetItemText(hOutputListView, iItem, 0, text, sizeof(text) / sizeof(wchar_t));
                 FillRect(hdc, &subItemRect, g_brBackground);
-                SetTextColor(hdc, RGB(255, 0, 255)); // Magenta for Time
+                SetTextColor(hdc, RGB(255, 0, 255));
                 subItemRect.left += 4;
                 DrawTextW(hdc, text, -1, &subItemRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
-
                 ListView_GetSubItemRect(hOutputListView, iItem, 1, LVIR_LABEL, &subItemRect);
                 ListView_GetItemText(hOutputListView, iItem, 1, text, sizeof(text) / sizeof(wchar_t));
                 FillRect(hdc, &subItemRect, g_brBackground);
-                SetTextColor(hdc, RGB(0, 255, 0)); // Green for Message
+                SetTextColor(hdc, RGB(0, 255, 0));
                 subItemRect.left += 4;
                 DrawTextW(hdc, text, -1, &subItemRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
-
                 return CDRF_DODEFAULT;
             }
             }
@@ -271,6 +268,10 @@ void CreateControls(HWND hWnd)
     ListView_SetExtendedListViewStyle(hOutputListView, LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER);
     hStatusLabel = CreateWindowW(L"STATIC", L"Ready.", WS_CHILD | WS_VISIBLE, 10, 445, 450, 20, hWnd, (HMENU)IDC_STATUS_LABEL, hInst, NULL);
     hCancelButton = CreateWindowW(L"BUTTON", L"Cancel Reconnect", WS_CHILD, 470, 440, 140, 25, hWnd, (HMENU)IDC_CANCEL_BUTTON, hInst, NULL);
+
+    HWND hHeader = ListView_GetHeader(hOutputListView);
+    SetWindowTheme(hHeader, L"Explorer", NULL);
+
     SetWindowTheme(hPortCombo, L"Explorer", NULL);
     SetWindowTheme(hBaudCombo, L"Explorer", NULL);
     SetWindowTheme(hRefreshButton, L"Explorer", NULL);
@@ -281,6 +282,7 @@ void CreateControls(HWND hWnd)
     SetWindowTheme(hCancelButton, L"Explorer", NULL);
     SetWindowTheme(hOutputListView, L"Explorer", NULL);
     SetWindowTheme(hClearButton, L"Explorer", NULL);
+
     EnableWindow(hStopButton, FALSE);
     ShowWindow(hCancelButton, SW_HIDE);
     std::vector<std::string> bauds = { "9600", "57600", "115200", "250000", "921600" };
@@ -288,6 +290,7 @@ void CreateControls(HWND hWnd)
     PopulatePorts();
     LoadSettings();
 }
+
 
 void PopulatePorts()
 {
