@@ -27,6 +27,9 @@
     <ClInclude Include="SerialMonitor.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="darktheme.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="SerialMonitor.cpp">

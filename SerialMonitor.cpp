@@ -1,17 +1,17 @@
 ﻿#include "framework.h"
 #include "SerialMonitor.h"
+#include "darktheme.h" // >> DARK THEME: Include our new header
 #include <windows.h>
 #include <string>
 #include <vector>
-#include <CommCtrl.h> // For ComboBox
-#include <ShlObj.h>   // For SHBrowseForFolder
+#include <CommCtrl.h> 
+#include <ShlObj.h>   
 
 #pragma comment(lib, "Comctl32.lib")
 #pragma comment(lib, "Shell32.lib")
 
 #define MAX_LOADSTRING 100
 
-// >> Custom messages for thread communication
 #define WM_SERIAL_DATA_RECEIVED (WM_APP + 1)
 #define WM_UPDATE_STATUS        (WM_APP + 2)
 
@@ -20,12 +20,15 @@ HINSTANCE hInst;
 WCHAR szTitle[MAX_LOADSTRING];
 WCHAR szWindowClass[MAX_LOADSTRING];
 
-// --- OUR NEW GLOBAL VARIABLES ---
 HWND hPortCombo, hBaudCombo, hStartButton, hStopButton, hOutputEdit, hRefreshButton;
-HWND hLogDirEdit, hBrowseButton, hStatusLabel, hCancelButton; // >> New controls
+HWND hLogDirEdit, hBrowseButton, hStatusLabel, hCancelButton;
 
 HANDLE hThread = NULL;
-volatile bool bShouldBeMonitoring = false; // >> Flag to control the main thread loop
+volatile bool bShouldBeMonitoring = false;
+
+// >> DARK THEME: Brushes for our dark theme colors
+HBRUSH g_hbrBackground = CreateSolidBrush(RGB(32, 32, 32));
+HBRUSH g_hbrEditBackground = CreateSolidBrush(RGB(43, 43, 43));
 
 // Forward declarations
 ATOM                MyRegisterClass(HINSTANCE hInstance);
@@ -38,9 +41,12 @@ DWORD WINAPI        ConnectionManagerThread(LPVOID lpParam);
 void                AppendTextToEdit(HWND hEdit, const wchar_t* text);
 void                SaveSettings();
 void                LoadSettings();
+void                PopulatePorts();
 
 int APIENTRY wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, _In_ LPWSTR lpCmdLine, _In_ int nCmdShow)
 {
+    InitDarkMode(); // >> DARK THEME: Initialize dark mode support at startup
+
     LoadStringW(hInstance, IDS_APP_TITLE, szTitle, MAX_LOADSTRING);
     LoadStringW(hInstance, IDC_SERIALMONITOR, szWindowClass, MAX_LOADSTRING);
     MyRegisterClass(hInstance);
@@ -65,7 +71,7 @@ ATOM MyRegisterClass(HINSTANCE hInstance)
     wcex.hInstance = hInstance;
     wcex.hIcon = LoadIcon(hInstance, MAKEINTRESOURCE(IDI_SERIALMONITOR));
     wcex.hCursor = LoadCursor(nullptr, IDC_ARROW);
-    wcex.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
+    wcex.hbrBackground = g_hbrBackground; // >> DARK THEME: Use our dark background brush
     wcex.lpszClassName = szWindowClass;
     wcex.hIconSm = LoadIcon(wcex.hInstance, MAKEINTRESOURCE(IDI_SMALL));
     return RegisterClassExW(&wcex);
@@ -79,35 +85,60 @@ BOOL InitInstance(HINSTANCE hInstance, int nCmdShow)
 
     if (!hWnd) return FALSE;
 
+    // >> DARK THEME: Tell this specific window to use the dark title bar
+    if (AllowDarkModeForWindow) {
+        AllowDarkModeForWindow(hWnd, true);
+    }
+
     ShowWindow(hWnd, nCmdShow);
     UpdateWindow(hWnd);
 
     return TRUE;
 }
 
-void PopulatePorts()
-{
-    SendMessageW(hPortCombo, CB_RESETCONTENT, 0, 0); // Clear existing items
-
-    wchar_t targetPath[255];
-    wchar_t comName[32];
-
-    for (int i = 1; i < 256; i++) {
-        wsprintfW(comName, L"COM%d", i);
-        if (QueryDosDeviceW(comName, targetPath, 255) != 0) {
-            SendMessageW(hPortCombo, CB_ADDSTRING, 0, (LPARAM)comName);
-        }
-    }
-    SendMessageW(hPortCombo, CB_SETCURSEL, 0, 0); // Select the first available port
-}
-
 LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 {
     switch (message)
     {
+        // >> DARK THEME: Handle messages to color the controls
+    case WM_CTLCOLORSTATIC:
+    {
+        HDC hdcStatic = (HDC)wParam;
+        SetTextColor(hdcStatic, RGB(255, 255, 255));
+        SetBkColor(hdcStatic, RGB(32, 32, 32));
+        return (INT_PTR)g_hbrBackground;
+    }
+    case WM_CTLCOLOREDIT:
+    {
+        HDC hdcEdit = (HDC)wParam;
+        SetTextColor(hdcEdit, RGB(220, 220, 220));
+        SetBkColor(hdcEdit, RGB(43, 43, 43));
+        return (INT_PTR)g_hbrEditBackground;
+    }
     case WM_CREATE:
         CreateControls(hWnd);
         break;
+
+        // >> NEW: Handle window resizing
+    case WM_SIZE:
+    {
+        // Get the new width and height of the window's client area
+        int newWidth = LOWORD(lParam);
+        int newHeight = HIWORD(lParam);
+
+        // Calculate the new size and position for the output edit box
+        // The top is fixed at 105. It spans the new width, minus 20px for margins.
+        // Its height is the new window height minus the top and bottom panels.
+        int editWidth = newWidth - 20;
+        int editHeight = newHeight - 105 - 45; // 105 for top panel, 45 for bottom status area
+        MoveWindow(hOutputEdit, 10, 105, editWidth, editHeight, TRUE);
+
+        // Reposition the status label and cancel button to the new bottom
+        MoveWindow(hStatusLabel, 10, newHeight - 35, 450, 20, TRUE);
+        MoveWindow(hCancelButton, newWidth - 150, newHeight - 40, 140, 25, TRUE);
+
+        break;
+    }
     case WM_COMMAND:
     {
         switch (LOWORD(wParam))
@@ -115,7 +146,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         case IDC_START_BUTTON:   StartMonitoring(hWnd); break;
         case IDC_STOP_BUTTON:    StopMonitoring(); break;
         case IDC_CANCEL_BUTTON:  StopMonitoring(); break;
-        case IDC_REFRESH_BUTTON: PopulatePorts(); break; // >> FIX THE REFRESH BUTTON
+        case IDC_REFRESH_BUTTON: PopulatePorts(); break;
         case IDC_BROWSE_BUTTON:
         {
             BROWSEINFOW bi = { 0 };
@@ -190,13 +221,39 @@ void CreateControls(HWND hWnd)
     hStatusLabel = CreateWindowW(L"STATIC", L"Ready.", WS_CHILD | WS_VISIBLE, 10, 445, 450, 20, hWnd, (HMENU)IDC_STATUS_LABEL, hInst, NULL);
     hCancelButton = CreateWindowW(L"BUTTON", L"Cancel Reconnect", WS_CHILD, 470, 440, 140, 25, hWnd, (HMENU)IDC_CANCEL_BUTTON, hInst, NULL);
 
+    // >> DARK THEME: Tell the standard controls to adopt the modern, dark-theme-aware style
+    SetWindowTheme(hPortCombo, L"Explorer", NULL);
+    SetWindowTheme(hBaudCombo, L"Explorer", NULL);
+    SetWindowTheme(hRefreshButton, L"Explorer", NULL);
+    SetWindowTheme(hStartButton, L"Explorer", NULL);
+    SetWindowTheme(hStopButton, L"Explorer", NULL);
+    SetWindowTheme(hBrowseButton, L"Explorer", NULL);
+    SetWindowTheme(hLogDirEdit, L"Explorer", NULL);
+    SetWindowTheme(hCancelButton, L"Explorer", NULL);
+
     // Set initial states
     EnableWindow(hStopButton, FALSE);
     std::vector<std::string> bauds = { "9600", "57600", "115200", "250000", "921600" };
     for (const auto& r : bauds) SendMessageA(hBaudCombo, CB_ADDSTRING, 0, (LPARAM)r.c_str());
 
-    PopulatePorts(); // >> CALL THE FUNCTION HERE
+    PopulatePorts();
     LoadSettings();
+}
+
+void PopulatePorts()
+{
+    SendMessageW(hPortCombo, CB_RESETCONTENT, 0, 0); // Clear existing items
+
+    wchar_t targetPath[255];
+    wchar_t comName[32];
+
+    for (int i = 1; i < 256; i++) {
+        wsprintfW(comName, L"COM%d", i);
+        if (QueryDosDeviceW(comName, targetPath, 255) != 0) {
+            SendMessageW(hPortCombo, CB_ADDSTRING, 0, (LPARAM)comName);
+        }
+    }
+    SendMessageW(hPortCombo, CB_SETCURSEL, 0, 0); // Select the first available port
 }
 
 void StartMonitoring(HWND hWnd)
@@ -227,7 +284,6 @@ void StopMonitoring()
     ShowWindow(hCancelButton, SW_HIDE);
 }
 
-// Replace your existing ConnectionManagerThread function with this one
 DWORD WINAPI ConnectionManagerThread(LPVOID lpParam)
 {
     HWND hWnd = (HWND)lpParam;
@@ -240,7 +296,6 @@ DWORD WINAPI ConnectionManagerThread(LPVOID lpParam)
     GetWindowTextW(hLogDirEdit, logDirW, MAX_PATH);
     std::wstring fullPortName = L"\\\\.\\" + std::wstring(portW);
 
-    // >> Buffers for batching data and status messages
     std::string dataBuffer;
     std::wstring statusBuffer;
     DWORD lastUpdateTime = GetTickCount();
@@ -268,7 +323,7 @@ DWORD WINAPI ConnectionManagerThread(LPVOID lpParam)
         }
 
         COMMTIMEOUTS timeouts = { 0 };
-        timeouts.ReadIntervalTimeout = 100; // Shorter timeout for more responsive loop
+        timeouts.ReadIntervalTimeout = 100;
         SetCommTimeouts(hSerial, &timeouts);
 
         statusBuffer = L"✅ Connected to " + std::wstring(portW);
@@ -303,8 +358,7 @@ DWORD WINAPI ConnectionManagerThread(LPVOID lpParam)
                 break;
             }
 
-            // >> The batching logic: Check if it's time to send an update
-            if (GetTickCount() - lastUpdateTime > 100) { // Update GUI every 100ms
+            if (GetTickCount() - lastUpdateTime > 100) {
                 if (!statusBuffer.empty()) {
                     wchar_t* statusMsg = new wchar_t[statusBuffer.length() + 1];
                     wcscpy_s(statusMsg, statusBuffer.length() + 1, statusBuffer.c_str());
@@ -318,7 +372,6 @@ DWORD WINAPI ConnectionManagerThread(LPVOID lpParam)
                     PostMessageW(hWnd, WM_SERIAL_DATA_RECEIVED, (WPARAM)wideBuf, 0);
                     dataBuffer.clear();
 
-                    // >> Force log file to write to disk
                     if (hLogFile != INVALID_HANDLE_VALUE) {
                         FlushFileBuffers(hLogFile);
                     }
@@ -332,8 +385,6 @@ DWORD WINAPI ConnectionManagerThread(LPVOID lpParam)
     if (hLogFile != INVALID_HANDLE_VALUE) CloseHandle(hLogFile);
     return 0;
 }
-
-
 
 void SaveSettings()
 {
@@ -369,7 +420,7 @@ void LoadSettings()
             SendMessageW(hBaudCombo, CB_SELECTSTRING, -1, (LPARAM)buffer);
         }
         else {
-            SendMessageW(hBaudCombo, CB_SELECTSTRING, -1, (LPARAM)L"250000"); // >> Default baud
+            SendMessageW(hBaudCombo, CB_SELECTSTRING, -1, (LPARAM)L"250000");
         }
 
         bufferSize = sizeof(buffer);
@@ -378,7 +429,7 @@ void LoadSettings()
         }
         else {
             SHGetFolderPathW(NULL, CSIDL_MYDOCUMENTS, NULL, 0, buffer);
-            SetWindowTextW(hLogDirEdit, buffer); // Default to Documents
+            SetWindowTextW(hLogDirEdit, buffer);
         }
 
         RegCloseKey(hKey);
@@ -387,18 +438,16 @@ void LoadSettings()
 
 void AppendTextToEdit(HWND hEdit, const wchar_t* newText)
 {
-    const int MAX_LINES = 5000; // Set a limit for the number of lines
+    const int MAX_LINES = 5000;
 
-    // >> Limit the number of lines to prevent slowdown
     int lineCount = SendMessage(hEdit, EM_GETLINECOUNT, 0, 0);
     if (lineCount > MAX_LINES) {
         int firstLineLen = SendMessage(hEdit, EM_LINELENGTH, 0, 0);
-        SendMessage(hEdit, EM_SETSEL, 0, firstLineLen + 2); // Select the first line + \r\n
-        SendMessage(hEdit, EM_REPLACESEL, 0, (LPARAM)L""); // Delete it
+        SendMessage(hEdit, EM_SETSEL, 0, firstLineLen + 2);
+        SendMessage(hEdit, EM_REPLACESEL, 0, (LPARAM)L"");
     }
 
     int len = GetWindowTextLengthW(hEdit);
-    SendMessageW(hEdit, EM_SETSEL, (WPARAM)len, (LPARAM)len); // Move cursor to end
-    SendMessageW(hEdit, EM_REPLACESEL, 0, (LPARAM)newText);  // Append text
-    // We will now append the newline in the received message if necessary, not here
+    SendMessageW(hEdit, EM_SETSEL, (WPARAM)len, (LPARAM)len);
+    SendMessageW(hEdit, EM_REPLACESEL, 0, (LPARAM)newText);
 }
