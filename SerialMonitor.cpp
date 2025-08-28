@@ -33,12 +33,11 @@ HINSTANCE hInst;
 WCHAR szTitle[MAX_LOADSTRING];
 WCHAR szWindowClass[MAX_LOADSTRING];
 HWND hPortCombo, hBaudCombo, hStartButton, hStopButton, hOutputListView, hRefreshButton;
-HWND hLogDirEdit, hBrowseButton, hStatusLabel, hCancelButton;
-HWND hClearButton;
+HWND hLogDirEdit, hBrowseButton, hStatusLabel, hCancelButton, hClearButton;
 HANDLE hThread = NULL;
 volatile bool bShouldBeMonitoring = false;
-HBRUSH g_hbrBackground = CreateSolidBrush(RGB(32, 32, 32));
-HBRUSH g_hbrEditBackground = CreateSolidBrush(RGB(43, 43, 43));
+HBRUSH g_hbrBackground = CreateSolidBrush(RGB(0, 0, 0));
+HBRUSH g_hbrEditBackground = CreateSolidBrush(RGB(20, 20, 20));
 
 // Forward Declarations
 ATOM                MyRegisterClass(HINSTANCE hInstance);
@@ -106,15 +105,33 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
     {
     case WM_CTLCOLORSTATIC: {
         HDC hdcStatic = (HDC)wParam;
-        SetTextColor(hdcStatic, RGB(255, 255, 255));
-        SetBkColor(hdcStatic, RGB(32, 32, 32));
+        SetTextColor(hdcStatic, RGB(220, 220, 220));
+        SetBkColor(hdcStatic, RGB(0, 0, 0));
         return (INT_PTR)g_hbrBackground;
     }
     case WM_CTLCOLOREDIT: {
         HDC hdcEdit = (HDC)wParam;
         SetTextColor(hdcEdit, RGB(220, 220, 220));
-        SetBkColor(hdcEdit, RGB(43, 43, 43));
+        SetBkColor(hdcEdit, RGB(20, 20, 20));
         return (INT_PTR)g_hbrEditBackground;
+    }
+    case WM_NOTIFY:
+    {
+        LPNMHDR lpnmh = (LPNMHDR)lParam;
+        if (lpnmh->hwndFrom == hOutputListView && lpnmh->code == NM_CUSTOMDRAW)
+        {
+            LPNMLVCUSTOMDRAW lplvcd = (LPNMLVCUSTOMDRAW)lParam;
+            switch (lplvcd->nmcd.dwDrawStage)
+            {
+            case CDDS_PREPAINT:
+                return CDRF_NOTIFYITEMDRAW;
+            case CDDS_ITEMPREPAINT:
+                lplvcd->clrText = RGB(0, 255, 0);
+                lplvcd->clrTextBk = RGB(0, 0, 0);
+                return CDRF_DODEFAULT;
+            }
+        }
+        break;
     }
     case WM_GUI_STATE_CONNECTING: {
         EnableWindow(hStartButton, FALSE);
@@ -141,12 +158,10 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         break;
     }
     case WM_CONNECTION_LOST: {
-        // >> FIX: Clean up the handle of the thread that just ended.
         if (hThread != NULL) {
             CloseHandle(hThread);
             hThread = NULL;
         }
-
         SetWindowTextW(hStatusLabel, L"Connection lost. Retrying in 5s...");
         SetTimer(hWnd, IDT_RECONNECT_TIMER, 5000, NULL);
         EnableWindow(hStartButton, FALSE);
@@ -177,9 +192,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         case IDC_STOP_BUTTON:    StopMonitoring(); break;
         case IDC_CANCEL_BUTTON:  StopMonitoring(); break;
         case IDC_REFRESH_BUTTON: PopulatePorts(); break;
-        case IDC_CLEAR_BUTTON:
-            ListView_DeleteAllItems(hOutputListView);
-            break;
+        case IDC_CLEAR_BUTTON:   ListView_DeleteAllItems(hOutputListView); break;
         case IDC_BROWSE_BUTTON: {
             BROWSEINFOW bi = { 0 };
             bi.lpszTitle = L"Select a folder to save logs";
@@ -208,7 +221,6 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
     return 0;
 }
 
-
 void CreateControls(HWND hWnd)
 {
     CreateWindowW(L"STATIC", L"Port:", WS_CHILD | WS_VISIBLE, 10, 15, 80, 20, hWnd, NULL, hInst, NULL);
@@ -222,7 +234,6 @@ void CreateControls(HWND hWnd)
     hStartButton = CreateWindowW(L"BUTTON", L"Start", WS_CHILD | WS_VISIBLE, 400, 10, 110, 25, hWnd, (HMENU)IDC_START_BUTTON, hInst, NULL);
     hStopButton = CreateWindowW(L"BUTTON", L"Stop", WS_CHILD | WS_VISIBLE, 400, 40, 110, 25, hWnd, (HMENU)IDC_STOP_BUTTON, hInst, NULL);
     hClearButton = CreateWindowW(L"BUTTON", L"Clear Output", WS_CHILD | WS_VISIBLE, 520, 10, 95, 55, hWnd, (HMENU)IDC_CLEAR_BUTTON, hInst, NULL);
-
     hOutputListView = CreateWindowExW(0, WC_LISTVIEWW, L"", WS_CHILD | WS_VISIBLE | WS_BORDER | LVS_REPORT, 10, 105, 605, 330, hWnd, (HMENU)IDC_OUTPUT_EDIT, hInst, NULL);
     LVCOLUMNW lvc = { 0 };
     lvc.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_SUBITEM;
@@ -233,10 +244,8 @@ void CreateControls(HWND hWnd)
     lvc.pszText = (LPWSTR)L"Message";
     ListView_InsertColumn(hOutputListView, 1, &lvc);
     ListView_SetExtendedListViewStyle(hOutputListView, LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER);
-
     hStatusLabel = CreateWindowW(L"STATIC", L"Ready.", WS_CHILD | WS_VISIBLE, 10, 445, 450, 20, hWnd, (HMENU)IDC_STATUS_LABEL, hInst, NULL);
     hCancelButton = CreateWindowW(L"BUTTON", L"Cancel Reconnect", WS_CHILD, 470, 440, 140, 25, hWnd, (HMENU)IDC_CANCEL_BUTTON, hInst, NULL);
-
     SetWindowTheme(hPortCombo, L"Explorer", NULL);
     SetWindowTheme(hBaudCombo, L"Explorer", NULL);
     SetWindowTheme(hRefreshButton, L"Explorer", NULL);
@@ -247,12 +256,10 @@ void CreateControls(HWND hWnd)
     SetWindowTheme(hCancelButton, L"Explorer", NULL);
     SetWindowTheme(hOutputListView, L"Explorer", NULL);
     SetWindowTheme(hClearButton, L"Explorer", NULL);
-
     EnableWindow(hStopButton, FALSE);
     ShowWindow(hCancelButton, SW_HIDE);
-    std::vector<std::string> bauds = { "9600", "57600", "115200", "250000", "333333", "444444","555555", "888888", "921600" };
+    std::vector<std::string> bauds = { "9600", "57600", "115200", "250000", "921600" };
     for (const auto& r : bauds) SendMessageA(hBaudCombo, CB_ADDSTRING, 0, (LPARAM)r.c_str());
-
     PopulatePorts();
     LoadSettings();
 }
@@ -271,16 +278,12 @@ void PopulatePorts()
     SendMessageW(hPortCombo, CB_SETCURSEL, 0, 0);
 }
 
-// Replace your existing StartMonitoring function with this one
 void StartMonitoring(HWND hWnd)
 {
     if (hThread != NULL) return;
-
     KillTimer(hWnd, IDT_RECONNECT_TIMER);
-
     bShouldBeMonitoring = true;
     PostMessage(hWnd, WM_GUI_STATE_CONNECTING, 0, 0);
-
     hThread = CreateThread(NULL, 0, SerialThread, hWnd, 0, NULL);
 }
 
@@ -301,7 +304,7 @@ void StopMonitoring()
     EnableWindow(hStopButton, FALSE);
     ShowWindow(hCancelButton, SW_HIDE);
 }
-// Replace your existing SerialThread function with this one
+
 DWORD WINAPI SerialThread(LPVOID lpParam)
 {
     HWND hWnd = (HWND)lpParam;
@@ -373,36 +376,27 @@ DWORD WINAPI SerialThread(LPVOID lpParam)
         }
 
         if (GetTickCount64() - lastUpdateTime > 100) {
-
-            // >> THE FIX: Process the buffer line by line
             size_t newline_pos;
             while ((newline_pos = dataBuffer.find('\n')) != std::string::npos)
             {
-                // Extract one full message (line) from the buffer
                 std::string message = dataBuffer.substr(0, newline_pos + 1);
-                // Remove that message from the buffer
                 dataBuffer.erase(0, newline_pos + 1);
 
-                // Create a LogEntry for this single message
                 LogEntry* entry = new LogEntry();
 
-                // Generate timestamp
                 SYSTEMTIME st_now;
                 GetLocalTime(&st_now);
                 wchar_t timeBuf[32];
                 wsprintfW(timeBuf, L"%02d:%02d:%02d.%03d", st_now.wHour, st_now.wMinute, st_now.wSecond, st_now.wMilliseconds);
                 entry->timestamp = timeBuf;
 
-                // Convert the single message to wide string (the newline normalization is now in AppendTextToEdit)
                 wchar_t* wideBuf = new wchar_t[message.length() + 1];
-                MultiByteToWideChar(CP_UTF8, 0, message.c_str(), -1, wideBuf, message.length() + 1);
+                MultiByteToWideChar(CP_UTF8, 0, message.c_str(), -1, wideBuf, static_cast<int>(message.length() + 1));
                 entry->message = wideBuf;
                 delete[] wideBuf;
 
-                // Post the message for this single line
                 PostMessageW(hWnd, WM_SERIAL_DATA_RECEIVED, (WPARAM)entry, 0);
             }
-
             if (hLogFile != INVALID_HANDLE_VALUE) FlushFileBuffers(hLogFile);
             lastUpdateTime = GetTickCount64();
         }
@@ -460,7 +454,7 @@ void AddLogEntry(const LogEntry* entry)
 {
     const int MAX_ITEMS = 5000;
     int itemCount = ListView_GetItemCount(hOutputListView);
-    if (itemCount > MAX_ITEMS) {
+    if (itemCount >= MAX_ITEMS) {
         ListView_DeleteItem(hOutputListView, 0);
     }
 
@@ -472,6 +466,26 @@ void AddLogEntry(const LogEntry* entry)
     lvi.pszText = (LPWSTR)entry->timestamp.c_str();
     int newIndex = ListView_InsertItem(hOutputListView, &lvi);
 
-    ListView_SetItemText(hOutputListView, newIndex, 1, (LPWSTR)entry->message.c_str());
+    std::wstring normalizedMessage = entry->message;
+    size_t pos = 0;
+    while ((pos = normalizedMessage.find(L"\n", pos)) != std::wstring::npos) {
+        if (pos == 0 || normalizedMessage[pos - 1] != L'\r') {
+            normalizedMessage.replace(pos, 1, L"\r\n");
+            pos += 2;
+        }
+        else {
+            pos += 1;
+        }
+    }
+
+    pos = normalizedMessage.find_last_not_of(L"\r\n");
+    if (pos != std::wstring::npos) {
+        normalizedMessage.erase(pos + 1);
+    }
+    else {
+        normalizedMessage.clear();
+    }
+
+    ListView_SetItemText(hOutputListView, newIndex, 1, (LPWSTR)normalizedMessage.c_str());
     ListView_EnsureVisible(hOutputListView, newIndex, FALSE);
 }
