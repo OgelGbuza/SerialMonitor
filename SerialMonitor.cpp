@@ -34,6 +34,7 @@ WCHAR szTitle[MAX_LOADSTRING];
 WCHAR szWindowClass[MAX_LOADSTRING];
 HWND hPortCombo, hBaudCombo, hStartButton, hStopButton, hOutputListView, hRefreshButton;
 HWND hLogDirEdit, hBrowseButton, hStatusLabel, hCancelButton;
+HWND hClearButton;
 HANDLE hThread = NULL;
 volatile bool bShouldBeMonitoring = false;
 HBRUSH g_hbrBackground = CreateSolidBrush(RGB(32, 32, 32));
@@ -176,6 +177,9 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         case IDC_STOP_BUTTON:    StopMonitoring(); break;
         case IDC_CANCEL_BUTTON:  StopMonitoring(); break;
         case IDC_REFRESH_BUTTON: PopulatePorts(); break;
+        case IDC_CLEAR_BUTTON:
+            ListView_DeleteAllItems(hOutputListView);
+            break;
         case IDC_BROWSE_BUTTON: {
             BROWSEINFOW bi = { 0 };
             bi.lpszTitle = L"Select a folder to save logs";
@@ -217,6 +221,7 @@ void CreateControls(HWND hWnd)
     hBrowseButton = CreateWindowW(L"BUTTON", L"...", WS_CHILD | WS_VISIBLE, 520, 70, 30, 25, hWnd, (HMENU)IDC_BROWSE_BUTTON, hInst, NULL);
     hStartButton = CreateWindowW(L"BUTTON", L"Start", WS_CHILD | WS_VISIBLE, 400, 10, 110, 25, hWnd, (HMENU)IDC_START_BUTTON, hInst, NULL);
     hStopButton = CreateWindowW(L"BUTTON", L"Stop", WS_CHILD | WS_VISIBLE, 400, 40, 110, 25, hWnd, (HMENU)IDC_STOP_BUTTON, hInst, NULL);
+    hClearButton = CreateWindowW(L"BUTTON", L"Clear Output", WS_CHILD | WS_VISIBLE, 520, 10, 95, 55, hWnd, (HMENU)IDC_CLEAR_BUTTON, hInst, NULL);
 
     hOutputListView = CreateWindowExW(0, WC_LISTVIEWW, L"", WS_CHILD | WS_VISIBLE | WS_BORDER | LVS_REPORT, 10, 105, 605, 330, hWnd, (HMENU)IDC_OUTPUT_EDIT, hInst, NULL);
     LVCOLUMNW lvc = { 0 };
@@ -241,6 +246,7 @@ void CreateControls(HWND hWnd)
     SetWindowTheme(hLogDirEdit, L"Explorer", NULL);
     SetWindowTheme(hCancelButton, L"Explorer", NULL);
     SetWindowTheme(hOutputListView, L"Explorer", NULL);
+    SetWindowTheme(hClearButton, L"Explorer", NULL);
 
     EnableWindow(hStopButton, FALSE);
     ShowWindow(hCancelButton, SW_HIDE);
