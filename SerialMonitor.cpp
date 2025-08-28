@@ -244,7 +244,7 @@ void CreateControls(HWND hWnd)
 
     EnableWindow(hStopButton, FALSE);
     ShowWindow(hCancelButton, SW_HIDE);
-    std::vector<std::string> bauds = { "9600", "57600", "115200", "250000", "921600" };
+    std::vector<std::string> bauds = { "9600", "57600", "115200", "250000", "333333", "444444","555555", "888888", "921600" };
     for (const auto& r : bauds) SendMessageA(hBaudCombo, CB_ADDSTRING, 0, (LPARAM)r.c_str());
 
     PopulatePorts();
