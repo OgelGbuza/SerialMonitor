@@ -606,21 +606,26 @@ DWORD WINAPI SerialThread(LPVOID lpParam)
     wchar_t logFileName[MAX_PATH];
     wsprintfW(logFileName, L"%s\\log_%s_%04d-%02d-%02d_%02d-%02d-%02d.txt", logDirW, portW, st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
     hLogFile = CreateFileW(logFileName, FILE_APPEND_DATA, FILE_SHARE_READ, NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+
     std::string dataBuffer;
     ULONGLONG lastUpdateTime = GetTickCount64();
+    ULONGLONG lastDataReceivedTime = GetTickCount64(); // >> WATCHDOG: Initialize timer
     char readBuf[512];
     DWORD bytesRead;
+
     while (bShouldBeMonitoring) {
         if (ReadFile(hSerial, readBuf, sizeof(readBuf), &bytesRead, NULL)) {
             if (bytesRead > 0) {
                 dataBuffer.append(readBuf, bytesRead);
                 if (hLogFile != INVALID_HANDLE_VALUE) WriteFile(hLogFile, readBuf, bytesRead, &bytesRead, NULL);
+                lastDataReceivedTime = GetTickCount64(); // >> WATCHDOG: Reset timer on data
             }
         }
         else {
             PostMessage(hWnd, WM_CONNECTION_LOST, 0, 0);
             break;
         }
+
         if (GetTickCount64() - lastUpdateTime > 100) {
             size_t newline_pos;
             while ((newline_pos = dataBuffer.find('\n')) != std::string::npos)
@@ -642,7 +647,24 @@ DWORD WINAPI SerialThread(LPVOID lpParam)
             if (hLogFile != INVALID_HANDLE_VALUE) FlushFileBuffers(hLogFile);
             lastUpdateTime = GetTickCount64();
         }
+
+        // >> WATCHDOG: Check for silence
+        if (GetTickCount64() - lastDataReceivedTime > 1000) {
+            // Post a status message to the GUI
+            wchar_t* resetMsg = new wchar_t[128];
+            wsprintfW(resetMsg, L"Device silent for 1s. Attempting reset...");
+            PostMessageW(hWnd, WM_UPDATE_STATUS, (WPARAM)resetMsg, 0);
+
+            // Perform the "software reset"
+            EscapeCommFunction(hSerial, CLRDTR);
+            Sleep(100);
+            EscapeCommFunction(hSerial, SETDTR);
+
+            // Reset the watchdog timer to give the device time to respond
+            lastDataReceivedTime = GetTickCount64();
+        }
     }
+
     if (hSerial != INVALID_HANDLE_VALUE) CloseHandle(hSerial);
     if (hLogFile != INVALID_HANDLE_VALUE) CloseHandle(hLogFile);
     return 0;
