@@ -123,6 +123,13 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 {
     switch (message)
     {
+    case WM_PAINT: {
+        PAINTSTRUCT ps;
+        HDC hdc = BeginPaint(hWnd, &ps);
+        DrawAnimationFrame(); // Redraw the animation canvas
+        EndPaint(hWnd, &ps);
+        break;
+    }
     case WM_CTLCOLORSTATIC: {
         HDC hdcStatic = (HDC)wParam;
         if ((HWND)lParam == hAnimationCanvas) {
@@ -317,8 +324,6 @@ void CreateControls(HWND hWnd)
     hStatusLabel = CreateWindowW(L"STATIC", L"Ready.", WS_CHILD | WS_VISIBLE, 10, 545, 450, 20, hWnd, (HMENU)IDC_STATUS_LABEL, hInst, NULL);
     hCancelButton = CreateWindowW(L"BUTTON", L"Cancel Reconnect", WS_CHILD, 10, 570, 140, 25, hWnd, (HMENU)IDC_CANCEL_BUTTON, hInst, NULL);
 
-    DrawAnimationFrame();
-
     SetWindowTheme(hPortCombo, L"Explorer", NULL);
     SetWindowTheme(hBaudCombo, L"Explorer", NULL);
     SetWindowTheme(hRefreshButton, L"Explorer", NULL);
@@ -334,7 +339,7 @@ void CreateControls(HWND hWnd)
 
     EnableWindow(hStopButton, FALSE);
     ShowWindow(hCancelButton, SW_HIDE);
-    std::vector<std::string> bauds = { "9600", "57600", "115200", "250000", "921600" };
+    std::vector<std::string> bauds = { "9600", "57600", "115200", "250000", "33333", "444444", "555555", "777777", "921600" };
     for (const auto& r : bauds) SendMessageA(hBaudCombo, CB_ADDSTRING, 0, (LPARAM)r.c_str());
     PopulatePorts();
     LoadSettings();
@@ -342,6 +347,7 @@ void CreateControls(HWND hWnd)
 
 void DrawAnimationFrame()
 {
+    // Cat Sprites
     const wchar_t* catIdle1 = LR"EOF(
    /\_/\
   ( o.o )
@@ -366,7 +372,6 @@ void DrawAnimationFrame()
   > ^ <
 --(,,)-(,,)--    ~
 )EOF";
-
     const wchar_t* catActive1 = LR"EOF(
       /\_/\
      ( o.o )
@@ -403,7 +408,8 @@ void DrawAnimationFrame()
     HFONT hOldFont = (HFONT)SelectObject(hdcMem, g_hMonoFont);
     SetBkMode(hdcMem, TRANSPARENT);
 
-    const wchar_t* catFrame = catIdle1;
+    const wchar_t* catFrame;
+
     if (g_animState == AS_IDLE) {
         int frame = g_animFrame % 4;
         if (frame == 0) catFrame = catIdle1;
@@ -416,40 +422,57 @@ void DrawAnimationFrame()
         catFrame = (frame < 15) ? catActive1 : catActive2;
     }
 
-    std::wstringstream ss(catFrame);
+    // Draw the centered cat
+    std::wstringstream ss_cat(catFrame);
     std::wstring line;
-    int y = 0;
+    int y_cat = 0;
     SetTextColor(hdcMem, RGB(0, 255, 0));
-    while (std::getline(ss, line)) {
-        // FIX 1: Center the cat horizontally.
-        // The original had a hardcoded X position of 10.
-        // This calculation centers the cat sprite in the animation canvas.
-        TextOutW(hdcMem, (ANIMATION_WIDTH / 2) - 80, y, line.c_str(), (int)line.length());
-        y += 12;
+    while (std::getline(ss_cat, line)) {
+        TextOutW(hdcMem, (ANIMATION_WIDTH / 2) - 80, y_cat, line.c_str(), (int)line.length());
+        y_cat += 12;
     }
 
+    // Water and Fish logic (only appears when not idle)
     if (g_animState != AS_IDLE) {
-        // FIX 2: Draw the water below the cat and across the full width.
-        // The cat sprite is about 5 lines high (y=0 to y=60). Let's draw the water below that.
+        // --- Water Width Control ---
+        // ADJUST THIS VALUE (from 0.0 to 1.0) to change the water width.
+        float water_width_percentage = 0.44f; // Currently ~52% of animation area width
+
         int water_y_start = 60;
-        for (int i = 0; i < 4; ++i) { // Draw 4 lines of water
+        int water_x_left_padding = 30;
+        int water_width = (int)(ANIMATION_WIDTH * water_width_percentage);
+        int x_offsets[] = { 0, 5, -3, 2 };
+
+        // Draw 4 lines of water.
+        for (int i = 0; i < 4; ++i) {
             std::wstring waterPattern = waterFrames[(g_animFrame + i) % 4];
-            std::wstring fullWaterLine;
-            // Repeat the water pattern to fill the animation width
-            while (wcslen(fullWaterLine.c_str()) * 8 < ANIMATION_WIDTH) {
-                fullWaterLine += waterPattern;
+
+            // Trim spaces from the pattern.
+            size_t first = waterPattern.find_first_not_of(L' ');
+            if (std::wstring::npos != first) {
+                size_t last = waterPattern.find_last_not_of(L' ');
+                waterPattern = waterPattern.substr(first, (last - first + 1));
             }
+
+            std::wstring fullWaterLine;
+            if (!waterPattern.empty()) {
+                // Repeat pattern to fill the width.
+                while (wcslen(fullWaterLine.c_str()) * 8 < water_width) {
+                    fullWaterLine += waterPattern;
+                }
+            }
+
             SetTextColor(hdcMem, (i % 2 == 0) ? RGB(0, 80, 200) : RGB(50, 150, 255));
-            TextOutW(hdcMem, 0, water_y_start + (i * 12), fullWaterLine.c_str(), (int)fullWaterLine.length());
+            // Apply the unique offset for each line to stagger the left edge.
+            int current_x = water_x_left_padding + x_offsets[i];
+            TextOutW(hdcMem, current_x, water_y_start + (i * 12), fullWaterLine.c_str(), (int)fullWaterLine.length());
         }
 
-        // FIX 3: Fish logic moved to allow spawning whenever connected.
-        // The fish will now appear randomly while connected, not just when data is being received.
-        if (!g_fish.is_alive && rand() % 30 == 0) { // Spawn fish randomly
+        if (!g_fish.is_alive && rand() % 30 == 0) {
             g_fish.is_alive = true;
-            g_fish.lifespan = 80 + rand() % 30; // Increase lifespan to cross the screen
-            g_fish.x = -40; // Start off-screen to the left
-            g_fish.y = water_y_start + 12 + (rand() % 24); // Position fish within the water
+            g_fish.lifespan = 80 + rand() % 30;
+            g_fish.x = -40;
+            g_fish.y = water_y_start + 12 + (rand() % 36);
             g_fish.sprite = fishFrames[rand() % 3];
         }
 
@@ -462,9 +485,8 @@ void DrawAnimationFrame()
                 TextOutW(hdcMem, g_fish.x, fish_y, fish_line.c_str(), (int)fish_line.length());
                 fish_y += 12;
             }
-            g_fish.x += 4; // Move the fish to the right
+            g_fish.x += 4;
             g_fish.lifespan--;
-            // Fish disappears when its lifespan ends or it moves off-screen
             if (g_fish.lifespan <= 0 || g_fish.x > ANIMATION_WIDTH) {
                 g_fish.is_alive = false;
             }
