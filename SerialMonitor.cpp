@@ -52,9 +52,10 @@ int g_animFrame = 0;
 enum AnimationState { AS_IDLE, AS_ANIMATING_IDLE, AS_ANIMATING_ACTIVE };
 AnimationState g_animState = AS_IDLE;
 struct Fish {
-    bool is_alive = false;
+    bool is_swimming = false;
     const wchar_t* sprite = L"";
     int x = 0, y = 0, lifespan = 0;
+    COLORREF color; // Fish color
 } g_fish;
 
 
@@ -339,7 +340,7 @@ void CreateControls(HWND hWnd)
 
     EnableWindow(hStopButton, FALSE);
     ShowWindow(hCancelButton, SW_HIDE);
-    std::vector<std::string> bauds = { "9600", "57600", "115200", "250000", "33333", "444444", "555555", "777777", "921600" };
+    std::vector<std::string> bauds = { "9600", "57600", "115200", "250000", "921600" };
     for (const auto& r : bauds) SendMessageA(hBaudCombo, CB_ADDSTRING, 0, (LPARAM)r.c_str());
     PopulatePorts();
     LoadSettings();
@@ -434,9 +435,11 @@ void DrawAnimationFrame()
 
     // Water and Fish logic (only appears when not idle)
     if (g_animState != AS_IDLE) {
-        // --- Water Width Control ---
-        // ADJUST THIS VALUE (from 0.0 to 1.0) to change the water width.
-        float water_width_percentage = 0.44f; // Currently ~52% of animation area width
+        // --- Animation Control Variables ---
+        // ADJUST this value (0.0 to 1.0) to change the water width.
+        float water_width_percentage = 0.52f;
+        // ADJUST this value to change fish frequency. Lower = more fish.
+        int fish_spawn_chance = 8; // Represents a 1 in X chance to spawn per frame
 
         int water_y_start = 60;
         int water_x_left_padding = 30;
@@ -468,16 +471,27 @@ void DrawAnimationFrame()
             TextOutW(hdcMem, current_x, water_y_start + (i * 12), fullWaterLine.c_str(), (int)fullWaterLine.length());
         }
 
-        if (!g_fish.is_alive && rand() % 30 == 0) {
-            g_fish.is_alive = true;
+        if (!g_fish.is_swimming && rand() % fish_spawn_chance == 0) {
+            g_fish.is_swimming = true;
             g_fish.lifespan = 80 + rand() % 30;
             g_fish.x = -40;
             g_fish.y = water_y_start + 12 + (rand() % 36);
             g_fish.sprite = fishFrames[rand() % 3];
+
+            // Define a color palette and pick a random color for the new fish
+            const std::vector<COLORREF> fish_colors = {
+                RGB(255, 255, 0),   // Yellow
+                RGB(255, 192, 203), // Pink
+                RGB(255, 0, 0),     // Red
+                RGB(128, 0, 128),   // Purple
+                RGB(255, 100, 100)  // Original reddish
+            };
+            g_fish.color = fish_colors[rand() % fish_colors.size()];
         }
 
-        if (g_fish.is_alive) {
-            SetTextColor(hdcMem, RGB(255, 100, 100));
+        if (g_fish.is_swimming) {
+            // Use the fish's stored color
+            SetTextColor(hdcMem, g_fish.color);
             std::wstringstream fish_ss(g_fish.sprite);
             std::wstring fish_line;
             int fish_y = g_fish.y;
@@ -488,7 +502,7 @@ void DrawAnimationFrame()
             g_fish.x += 4;
             g_fish.lifespan--;
             if (g_fish.lifespan <= 0 || g_fish.x > ANIMATION_WIDTH) {
-                g_fish.is_alive = false;
+                g_fish.is_swimming = false;
             }
         }
     }
