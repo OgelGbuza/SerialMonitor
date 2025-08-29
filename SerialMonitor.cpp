@@ -4,8 +4,10 @@
 #include <windows.h>
 #include <string>
 #include <vector>
+#include <sstream> 
 #include <CommCtrl.h> 
 #include <ShlObj.h>   
+#include <time.h> 
 
 #pragma comment(lib, "Comctl32.lib")
 #pragma comment(lib, "Shell32.lib")
@@ -20,7 +22,9 @@
 #define WM_CONNECTION_LOST      (WM_APP + 5)
 
 // Timer ID
-#define IDT_RECONNECT_TIMER 1
+#define IDT_RECONNECT_TIMER   1
+#define IDT_ANIMATION_TIMER 2
+#define IDT_WATCHDOG_TIMER  3
 
 // Struct to pass timestamped log data
 struct LogEntry {
@@ -39,6 +43,21 @@ volatile bool bShouldBeMonitoring = false;
 HBRUSH g_brBackground = CreateSolidBrush(RGB(0, 0, 0));
 HBRUSH g_brEditBackground = CreateSolidBrush(RGB(20, 20, 20));
 
+// ANIMATION GLOBALS
+#define ANIMATION_WIDTH 280
+#define ANIMATION_HEIGHT 112
+HWND hAnimationCanvas;
+HFONT g_hMonoFont;
+int g_animFrame = 0;
+enum AnimationState { AS_IDLE, AS_ANIMATING_IDLE, AS_ANIMATING_ACTIVE };
+AnimationState g_animState = AS_IDLE;
+struct Fish {
+    bool is_alive = false;
+    const wchar_t* sprite = L"";
+    int x = 0, y = 0, lifespan = 0;
+} g_fish;
+
+
 // Forward Declarations
 ATOM                MyRegisterClass(HINSTANCE hInstance);
 BOOL                InitInstance(HINSTANCE, int);
@@ -51,9 +70,11 @@ void                AddLogEntry(const LogEntry* entry);
 void                SaveSettings();
 void                LoadSettings();
 void                PopulatePorts();
+void                DrawAnimationFrame();
 
 int APIENTRY wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, _In_ LPWSTR lpCmdLine, _In_ int nCmdShow)
 {
+    srand((unsigned int)time(NULL));
     INITCOMMONCONTROLSEX icex;
     icex.dwSize = sizeof(INITCOMMONCONTROLSEX);
     icex.dwICC = ICC_LISTVIEW_CLASSES;
@@ -90,7 +111,7 @@ BOOL InitInstance(HINSTANCE hInstance, int nCmdShow)
 {
     hInst = hInstance;
     HWND hWnd = CreateWindowW(szWindowClass, szTitle, WS_OVERLAPPEDWINDOW,
-        CW_USEDEFAULT, 0, 640, 520, nullptr, nullptr, hInstance, nullptr);
+        CW_USEDEFAULT, 0, 960, 640, nullptr, nullptr, hInstance, nullptr);
     if (!hWnd) return FALSE;
     if (AllowDarkModeForWindow) AllowDarkModeForWindow(hWnd, true);
     ShowWindow(hWnd, nCmdShow);
@@ -104,6 +125,9 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
     {
     case WM_CTLCOLORSTATIC: {
         HDC hdcStatic = (HDC)wParam;
+        if ((HWND)lParam == hAnimationCanvas) {
+            return (INT_PTR)GetStockObject(NULL_BRUSH);
+        }
         SetTextColor(hdcStatic, RGB(255, 0, 255));
         SetBkColor(hdcStatic, RGB(0, 0, 0));
         return (INT_PTR)g_brBackground;
@@ -114,21 +138,14 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         SetBkColor(hdcEdit, RGB(20, 20, 20));
         return (INT_PTR)g_brEditBackground;
     }
-    case WM_NOTIFY:
-    {
+    case WM_NOTIFY: {
         LPNMHDR lpnmh = (LPNMHDR)lParam;
-        if (lpnmh->hwndFrom == hOutputListView && lpnmh->code == NM_CUSTOMDRAW)
-        {
+        if (lpnmh->hwndFrom == hOutputListView && lpnmh->code == NM_CUSTOMDRAW) {
             LPNMLVCUSTOMDRAW lplvcd = (LPNMLVCUSTOMDRAW)lParam;
-            switch (lplvcd->nmcd.dwDrawStage)
-            {
-            case CDDS_PREPAINT:
-                return CDRF_NOTIFYITEMDRAW;
-            case CDDS_ITEMPREPAINT:
-                lplvcd->clrTextBk = RGB(0, 0, 0);
-                return CDRF_NOTIFYPOSTPAINT;
-            case CDDS_ITEMPOSTPAINT:
-            {
+            switch (lplvcd->nmcd.dwDrawStage) {
+            case CDDS_PREPAINT: return CDRF_NOTIFYITEMDRAW;
+            case CDDS_ITEMPREPAINT: lplvcd->clrTextBk = RGB(0, 0, 0); return CDRF_NOTIFYPOSTPAINT;
+            case CDDS_ITEMPOSTPAINT: {
                 int iItem = (int)lplvcd->nmcd.dwItemSpec;
                 HDC hdc = lplvcd->nmcd.hdc;
                 wchar_t text[512];
@@ -162,9 +179,16 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         EnableWindow(hStartButton, FALSE);
         EnableWindow(hStopButton, TRUE);
         ShowWindow(hCancelButton, SW_HIDE);
+        g_animState = AS_ANIMATING_IDLE;
+        SetTimer(hWnd, IDT_ANIMATION_TIMER, 400, NULL);
         break;
     }
     case WM_SERIAL_DATA_RECEIVED: {
+        if (g_animState == AS_ANIMATING_IDLE) {
+            SetTimer(hWnd, IDT_ANIMATION_TIMER, 250, NULL);
+        }
+        g_animState = AS_ANIMATING_ACTIVE;
+        SetTimer(hWnd, IDT_WATCHDOG_TIMER, 1000, NULL);
         LogEntry* entry = (LogEntry*)wParam;
         AddLogEntry(entry);
         delete entry;
@@ -186,12 +210,26 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         EnableWindow(hStartButton, FALSE);
         EnableWindow(hStopButton, FALSE);
         ShowWindow(hCancelButton, SW_SHOW);
+        g_animState = AS_IDLE;
+        KillTimer(hWnd, IDT_ANIMATION_TIMER);
+        KillTimer(hWnd, IDT_WATCHDOG_TIMER);
+        DrawAnimationFrame();
         break;
     }
     case WM_TIMER: {
-        if (wParam == IDT_RECONNECT_TIMER) {
+        switch (wParam) {
+        case IDT_RECONNECT_TIMER:
             KillTimer(hWnd, IDT_RECONNECT_TIMER);
             StartMonitoring(hWnd);
+            break;
+        case IDT_ANIMATION_TIMER:
+            DrawAnimationFrame();
+            break;
+        case IDT_WATCHDOG_TIMER:
+            KillTimer(hWnd, IDT_WATCHDOG_TIMER);
+            g_animState = AS_ANIMATING_IDLE;
+            SetTimer(hWnd, IDT_ANIMATION_TIMER, 400, NULL);
+            break;
         }
         break;
     }
@@ -199,10 +237,11 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
     case WM_SIZE: {
         int newWidth = LOWORD(lParam);
         int newHeight = HIWORD(lParam);
-        MoveWindow(hOutputListView, 10, 105, newWidth - 20, newHeight - 150, TRUE);
+        MoveWindow(hOutputListView, 10, 130, newWidth - 20, newHeight - 170, TRUE);
         ListView_SetColumnWidth(hOutputListView, 1, newWidth - 125);
-        MoveWindow(hStatusLabel, 10, newHeight - 35, newWidth - 170, 20, TRUE);
-        MoveWindow(hCancelButton, newWidth - 150, newHeight - 40, 140, 25, TRUE);
+        MoveWindow(hStatusLabel, 10, newHeight - 35, 200, 25, TRUE);
+        MoveWindow(hCancelButton, 220, newHeight - 35, 140, 25, TRUE);
+        MoveWindow(hAnimationCanvas, newWidth - (ANIMATION_WIDTH + 20), 10, ANIMATION_WIDTH, ANIMATION_HEIGHT, TRUE);
         break;
     }
     case WM_COMMAND: {
@@ -234,7 +273,10 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         StopMonitoring();
         DestroyWindow(hWnd);
         break;
-    case WM_DESTROY: PostQuitMessage(0); break;
+    case WM_DESTROY:
+        DeleteObject(g_hMonoFont);
+        PostQuitMessage(0);
+        break;
     default: return DefWindowProc(hWnd, message, wParam, lParam);
     }
     return 0;
@@ -242,35 +284,40 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 
 void CreateControls(HWND hWnd)
 {
+    g_hMonoFont = CreateFontW(14, 0, 0, 0, FW_REGULAR, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+        OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY,
+        FIXED_PITCH | FF_MODERN, L"Consolas");
+
     CreateWindowW(L"STATIC", L"Port:", WS_CHILD | WS_VISIBLE, 10, 15, 80, 20, hWnd, NULL, hInst, NULL);
     hPortCombo = CreateWindowW(WC_COMBOBOXW, L"", CBS_DROPDOWNLIST | WS_CHILD | WS_VISIBLE | WS_VSCROLL, 100, 10, 180, 150, hWnd, (HMENU)IDC_PORT_COMBO, hInst, NULL);
     hRefreshButton = CreateWindowW(L"BUTTON", L"Refresh", WS_CHILD | WS_VISIBLE, 290, 10, 80, 25, hWnd, (HMENU)IDC_REFRESH_BUTTON, hInst, NULL);
     CreateWindowW(L"STATIC", L"Baud Rate:", WS_CHILD | WS_VISIBLE, 10, 45, 80, 20, hWnd, NULL, hInst, NULL);
     hBaudCombo = CreateWindowW(WC_COMBOBOXW, L"", CBS_DROPDOWNLIST | WS_CHILD | WS_VISIBLE | WS_VSCROLL, 100, 40, 180, 200, hWnd, (HMENU)IDC_BAUD_COMBO, hInst, NULL);
-    CreateWindowW(L"STATIC", L"Log Folder:", WS_CHILD | WS_VISIBLE, 10, 75, 80, 20, hWnd, NULL, hInst, NULL);
-    hLogDirEdit = CreateWindowW(L"EDIT", L"", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL, 100, 70, 410, 25, hWnd, (HMENU)IDC_LOGDIR_EDIT, hInst, NULL);
-    hBrowseButton = CreateWindowW(L"BUTTON", L"...", WS_CHILD | WS_VISIBLE, 520, 70, 30, 25, hWnd, (HMENU)IDC_BROWSE_BUTTON, hInst, NULL);
+    CreateWindowW(L"STATIC", L"Log Folder:", WS_CHILD | WS_VISIBLE, 10, 80, 80, 20, hWnd, NULL, hInst, NULL);
+    hLogDirEdit = CreateWindowW(L"EDIT", L"", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL, 100, 75, 410, 25, hWnd, (HMENU)IDC_LOGDIR_EDIT, hInst, NULL);
+    hBrowseButton = CreateWindowW(L"BUTTON", L"...", WS_CHILD | WS_VISIBLE, 520, 75, 30, 25, hWnd, (HMENU)IDC_BROWSE_BUTTON, hInst, NULL);
     hStartButton = CreateWindowW(L"BUTTON", L"Start", WS_CHILD | WS_VISIBLE, 400, 10, 110, 25, hWnd, (HMENU)IDC_START_BUTTON, hInst, NULL);
     hStopButton = CreateWindowW(L"BUTTON", L"Stop", WS_CHILD | WS_VISIBLE, 400, 40, 110, 25, hWnd, (HMENU)IDC_STOP_BUTTON, hInst, NULL);
     hClearButton = CreateWindowW(L"BUTTON", L"Clear Output", WS_CHILD | WS_VISIBLE, 520, 10, 95, 55, hWnd, (HMENU)IDC_CLEAR_BUTTON, hInst, NULL);
-    hOutputListView = CreateWindowExW(0, WC_LISTVIEWW, L"", WS_CHILD | WS_VISIBLE | WS_BORDER | LVS_REPORT, 10, 105, 605, 330, hWnd, (HMENU)IDC_OUTPUT_EDIT, hInst, NULL);
 
+    hAnimationCanvas = CreateWindowW(L"STATIC", L"", WS_CHILD | WS_VISIBLE | SS_OWNERDRAW, 640, 10, ANIMATION_WIDTH, ANIMATION_HEIGHT, hWnd, (HMENU)IDC_ANIMATION_CANVAS, hInst, NULL);
+
+    hOutputListView = CreateWindowExW(0, WC_LISTVIEWW, L"", WS_CHILD | WS_VISIBLE | WS_BORDER | LVS_REPORT, 10, 130, 920, 400, hWnd, (HMENU)IDC_OUTPUT_EDIT, hInst, NULL);
     ListView_SetBkColor(hOutputListView, RGB(0, 0, 0));
-
     LVCOLUMNW lvc = { 0 };
     lvc.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_SUBITEM;
     lvc.cx = 100;
     lvc.pszText = (LPWSTR)L"Time";
     ListView_InsertColumn(hOutputListView, 0, &lvc);
-    lvc.cx = 500;
+    lvc.cx = 815;
     lvc.pszText = (LPWSTR)L"Message";
     ListView_InsertColumn(hOutputListView, 1, &lvc);
     ListView_SetExtendedListViewStyle(hOutputListView, LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER);
-    hStatusLabel = CreateWindowW(L"STATIC", L"Ready.", WS_CHILD | WS_VISIBLE, 10, 445, 450, 20, hWnd, (HMENU)IDC_STATUS_LABEL, hInst, NULL);
-    hCancelButton = CreateWindowW(L"BUTTON", L"Cancel Reconnect", WS_CHILD, 470, 440, 140, 25, hWnd, (HMENU)IDC_CANCEL_BUTTON, hInst, NULL);
 
-    HWND hHeader = ListView_GetHeader(hOutputListView);
-    SetWindowTheme(hHeader, L"Explorer", NULL);
+    hStatusLabel = CreateWindowW(L"STATIC", L"Ready.", WS_CHILD | WS_VISIBLE, 10, 545, 450, 20, hWnd, (HMENU)IDC_STATUS_LABEL, hInst, NULL);
+    hCancelButton = CreateWindowW(L"BUTTON", L"Cancel Reconnect", WS_CHILD, 10, 570, 140, 25, hWnd, (HMENU)IDC_CANCEL_BUTTON, hInst, NULL);
+
+    DrawAnimationFrame();
 
     SetWindowTheme(hPortCombo, L"Explorer", NULL);
     SetWindowTheme(hBaudCombo, L"Explorer", NULL);
@@ -282,6 +329,8 @@ void CreateControls(HWND hWnd)
     SetWindowTheme(hCancelButton, L"Explorer", NULL);
     SetWindowTheme(hOutputListView, L"Explorer", NULL);
     SetWindowTheme(hClearButton, L"Explorer", NULL);
+    HWND hHeader = ListView_GetHeader(hOutputListView);
+    SetWindowTheme(hHeader, L"Explorer", NULL);
 
     EnableWindow(hStopButton, FALSE);
     ShowWindow(hCancelButton, SW_HIDE);
@@ -291,6 +340,167 @@ void CreateControls(HWND hWnd)
     LoadSettings();
 }
 
+void DrawAnimationFrame()
+{
+    const wchar_t* catIdle1 = LR"EOF(
+   /\_/\
+  ( o.o )
+  > ^ <
+--(,,)-(,,)--
+)EOF";
+    const wchar_t* catIdle2 = LR"EOF(
+   /\_/\
+  ( o.o )
+  > ^ <
+--(,,)-(,,)--  ~
+)EOF";
+    const wchar_t* catIdle3 = LR"EOF(
+   /\_/\
+  ( o.o )
+  > ^ <
+--(,,)-(,,)--   ~
+)EOF";
+    const wchar_t* catIdle4 = LR"EOF(
+   /\_/\
+  ( o.o )
+  > ^ <
+--(,,)-(,,)--    ~
+)EOF";
+
+    const wchar_t* catActive1 = LR"EOF(
+      /\_/\
+     ( o.o )
+     > ^ <
+    ( (")" ) )
+)EOF";
+    const wchar_t* catActive2 = LR"EOF(
+      /\_/\
+     ( -.- )
+     > ^ <
+    ( (")" ) )
+)EOF";
+
+    const wchar_t* waterFrames[] = {
+        L"    --__--__--__--    ",
+        L"   --__--__--__--_    ",
+        L"  _--__--__--__--__   ",
+        L" --__--__--__--__-   "
+    };
+    const wchar_t* fishFrames[] = {
+        LR"EOF(><((('>  )EOF",
+        LR"EOF( <')))<>< )EOF",
+        LR"EOF( ,.'o)<   )EOF"
+    };
+
+    HDC hdc = GetDC(hAnimationCanvas);
+    HDC hdcMem = CreateCompatibleDC(hdc);
+    HBITMAP hbm = CreateCompatibleBitmap(hdc, ANIMATION_WIDTH, ANIMATION_HEIGHT);
+    SelectObject(hdcMem, hbm);
+
+    RECT rc = { 0, 0, ANIMATION_WIDTH, ANIMATION_HEIGHT };
+    FillRect(hdcMem, &rc, g_brBackground);
+
+    HFONT hOldFont = (HFONT)SelectObject(hdcMem, g_hMonoFont);
+    SetBkMode(hdcMem, TRANSPARENT);
+
+    const wchar_t* catFrame = catIdle1;
+    if (g_animState == AS_IDLE) {
+        int frame = g_animFrame % 4;
+        if (frame == 0) catFrame = catIdle1;
+        else if (frame == 1) catFrame = catIdle2;
+        else if (frame == 2) catFrame = catIdle3;
+        else catFrame = catIdle4;
+    }
+    else {
+        int frame = g_animFrame % 16;
+        catFrame = (frame < 15) ? catActive1 : catActive2;
+    }
+
+    std::wstringstream ss(catFrame);
+    std::wstring line;
+    int y = 0;
+    SetTextColor(hdcMem, RGB(0, 255, 0));
+    while (std::getline(ss, line)) {
+        // FIX 1: Center the cat horizontally.
+        // The original had a hardcoded X position of 10.
+        // This calculation centers the cat sprite in the animation canvas.
+        TextOutW(hdcMem, (ANIMATION_WIDTH / 2) - 80, y, line.c_str(), (int)line.length());
+        y += 12;
+    }
+
+    if (g_animState != AS_IDLE) {
+        // FIX 2: Draw the water below the cat and across the full width.
+        // The cat sprite is about 5 lines high (y=0 to y=60). Let's draw the water below that.
+        int water_y_start = 60;
+        for (int i = 0; i < 4; ++i) { // Draw 4 lines of water
+            std::wstring waterPattern = waterFrames[(g_animFrame + i) % 4];
+            std::wstring fullWaterLine;
+            // Repeat the water pattern to fill the animation width
+            while (wcslen(fullWaterLine.c_str()) * 8 < ANIMATION_WIDTH) {
+                fullWaterLine += waterPattern;
+            }
+            SetTextColor(hdcMem, (i % 2 == 0) ? RGB(0, 80, 200) : RGB(50, 150, 255));
+            TextOutW(hdcMem, 0, water_y_start + (i * 12), fullWaterLine.c_str(), (int)fullWaterLine.length());
+        }
+
+        // FIX 3: Fish logic moved to allow spawning whenever connected.
+        // The fish will now appear randomly while connected, not just when data is being received.
+        if (!g_fish.is_alive && rand() % 30 == 0) { // Spawn fish randomly
+            g_fish.is_alive = true;
+            g_fish.lifespan = 80 + rand() % 30; // Increase lifespan to cross the screen
+            g_fish.x = -40; // Start off-screen to the left
+            g_fish.y = water_y_start + 12 + (rand() % 24); // Position fish within the water
+            g_fish.sprite = fishFrames[rand() % 3];
+        }
+
+        if (g_fish.is_alive) {
+            SetTextColor(hdcMem, RGB(255, 100, 100));
+            std::wstringstream fish_ss(g_fish.sprite);
+            std::wstring fish_line;
+            int fish_y = g_fish.y;
+            while (std::getline(fish_ss, fish_line)) {
+                TextOutW(hdcMem, g_fish.x, fish_y, fish_line.c_str(), (int)fish_line.length());
+                fish_y += 12;
+            }
+            g_fish.x += 4; // Move the fish to the right
+            g_fish.lifespan--;
+            // Fish disappears when its lifespan ends or it moves off-screen
+            if (g_fish.lifespan <= 0 || g_fish.x > ANIMATION_WIDTH) {
+                g_fish.is_alive = false;
+            }
+        }
+    }
+
+    BitBlt(hdc, 0, 0, ANIMATION_WIDTH, ANIMATION_HEIGHT, hdcMem, 0, 0, SRCCOPY);
+    SelectObject(hdcMem, hOldFont);
+
+    DeleteObject(hbm);
+    DeleteDC(hdcMem);
+    ReleaseDC(hAnimationCanvas, hdc);
+    g_animFrame++;
+}
+
+void StopMonitoring()
+{
+    HWND hWnd = GetParent(hStartButton);
+    KillTimer(hWnd, IDT_RECONNECT_TIMER);
+    KillTimer(hWnd, IDT_ANIMATION_TIMER);
+    KillTimer(hWnd, IDT_WATCHDOG_TIMER);
+    g_animState = AS_IDLE;
+    DrawAnimationFrame();
+    if (bShouldBeMonitoring) {
+        bShouldBeMonitoring = false;
+        if (hThread != NULL) {
+            WaitForSingleObject(hThread, 2000);
+            CloseHandle(hThread);
+            hThread = NULL;
+        }
+    }
+    SetWindowTextW(hStatusLabel, L"Stopped.");
+    EnableWindow(hStartButton, TRUE);
+    EnableWindow(hStopButton, FALSE);
+    ShowWindow(hCancelButton, SW_HIDE);
+}
 
 void PopulatePorts()
 {
@@ -313,24 +523,6 @@ void StartMonitoring(HWND hWnd)
     bShouldBeMonitoring = true;
     PostMessage(hWnd, WM_GUI_STATE_CONNECTING, 0, 0);
     hThread = CreateThread(NULL, 0, SerialThread, hWnd, 0, NULL);
-}
-
-void StopMonitoring()
-{
-    HWND hWnd = GetParent(hStartButton);
-    KillTimer(hWnd, IDT_RECONNECT_TIMER);
-    if (bShouldBeMonitoring) {
-        bShouldBeMonitoring = false;
-        if (hThread != NULL) {
-            WaitForSingleObject(hThread, 2000);
-            CloseHandle(hThread);
-            hThread = NULL;
-        }
-    }
-    SetWindowTextW(hStatusLabel, L"Stopped.");
-    EnableWindow(hStartButton, TRUE);
-    EnableWindow(hStopButton, FALSE);
-    ShowWindow(hCancelButton, SW_HIDE);
 }
 
 DWORD WINAPI SerialThread(LPVOID lpParam)
