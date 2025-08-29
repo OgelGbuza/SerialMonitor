@@ -566,21 +566,26 @@ DWORD WINAPI SerialThread(LPVOID lpParam)
     HWND hWnd = (HWND)lpParam;
     HANDLE hSerial = INVALID_HANDLE_VALUE;
     HANDLE hLogFile = INVALID_HANDLE_VALUE;
+
     wchar_t portW[32], baudW[16], logDirW[MAX_PATH];
     GetWindowTextW(hPortCombo, portW, 32);
     GetWindowTextW(hBaudCombo, baudW, 16);
     GetWindowTextW(hLogDirEdit, logDirW, MAX_PATH);
     std::wstring fullPortName = L"\\\\.\\" + std::wstring(portW);
+
     wchar_t status[128];
     wsprintfW(status, L"Connecting to %s...", portW);
     wchar_t* statusMsg = new wchar_t[128];
     wcscpy_s(statusMsg, 128, status);
     PostMessageW(hWnd, WM_UPDATE_STATUS, (WPARAM)statusMsg, 0);
+
     hSerial = CreateFileW(fullPortName.c_str(), GENERIC_READ | GENERIC_WRITE, 0, 0, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0);
+
     if (hSerial == INVALID_HANDLE_VALUE) {
         PostMessage(hWnd, WM_CONNECTION_LOST, 0, 0);
         return 1;
     }
+
     DCB dcb = { 0 };
     dcb.DCBlength = sizeof(dcb);
     if (GetCommState(hSerial, &dcb)) {
@@ -596,11 +601,13 @@ DWORD WINAPI SerialThread(LPVOID lpParam)
     SetCommTimeouts(hSerial, &timeouts);
     EscapeCommFunction(hSerial, CLRDTR); Sleep(100);
     EscapeCommFunction(hSerial, SETDTR); Sleep(500);
+
     PostMessage(hWnd, WM_GUI_STATE_CONNECTED, 0, 0);
     wsprintfW(status, L"✅ Connected to %s", portW);
     statusMsg = new wchar_t[128];
     wcscpy_s(statusMsg, 128, status);
     PostMessageW(hWnd, WM_UPDATE_STATUS, (WPARAM)statusMsg, 0);
+
     SYSTEMTIME st;
     GetLocalTime(&st);
     wchar_t logFileName[MAX_PATH];
@@ -609,7 +616,7 @@ DWORD WINAPI SerialThread(LPVOID lpParam)
 
     std::string dataBuffer;
     ULONGLONG lastUpdateTime = GetTickCount64();
-    ULONGLONG lastDataReceivedTime = GetTickCount64(); // >> WATCHDOG: Initialize timer
+    ULONGLONG lastDataReceivedTime = GetTickCount64();
     char readBuf[512];
     DWORD bytesRead;
 
@@ -618,7 +625,7 @@ DWORD WINAPI SerialThread(LPVOID lpParam)
             if (bytesRead > 0) {
                 dataBuffer.append(readBuf, bytesRead);
                 if (hLogFile != INVALID_HANDLE_VALUE) WriteFile(hLogFile, readBuf, bytesRead, &bytesRead, NULL);
-                lastDataReceivedTime = GetTickCount64(); // >> WATCHDOG: Reset timer on data
+                lastDataReceivedTime = GetTickCount64();
             }
         }
         else {
@@ -648,20 +655,16 @@ DWORD WINAPI SerialThread(LPVOID lpParam)
             lastUpdateTime = GetTickCount64();
         }
 
-        // >> WATCHDOG: Check for silence
+        // WATCHDOG: Check for silence
         if (GetTickCount64() - lastDataReceivedTime > 1000) {
             // Post a status message to the GUI
             wchar_t* resetMsg = new wchar_t[128];
-            wsprintfW(resetMsg, L"Device silent for 1s. Attempting reset...");
+            wsprintfW(resetMsg, L"Device silent. Forcing full reconnect...");
             PostMessageW(hWnd, WM_UPDATE_STATUS, (WPARAM)resetMsg, 0);
 
-            // Perform the "software reset"
-            EscapeCommFunction(hSerial, CLRDTR);
-            Sleep(100);
-            EscapeCommFunction(hSerial, SETDTR);
-
-            // Reset the watchdog timer to give the device time to respond
-            lastDataReceivedTime = GetTickCount64();
+            // Break the inner loop to trigger a full close/re-open of the port
+            PostMessage(hWnd, WM_CONNECTION_LOST, 0, 0);
+            break;
         }
     }
 
